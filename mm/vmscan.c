@@ -2630,24 +2630,6 @@ DEFINE_STATIC_KEY_ARRAY_FALSE(lru_gen_caps, NR_LRU_GEN_CAPS);
 		for ((type) = 0; (type) < ANON_AND_FILE; (type)++)	\
 			for ((zone) = 0; (zone) < MAX_NR_ZONES; (zone)++)
 
-static int page_lru_gen(struct page *page)
-{
-	unsigned long flags = READ_ONCE(page->flags);
-
-	return ((flags & LRU_GEN_MASK) >> LRU_GEN_PGOFF) - 1;
-}
-
-static int page_lru_tier(struct page *page)
-{
-	int refs;
-	unsigned long flags = READ_ONCE(page->flags);
-
-	refs = (flags & LRU_REFS_FLAGS) == LRU_REFS_FLAGS ?
-	       ((flags & LRU_REFS_MASK) >> LRU_REFS_PGOFF) + 1 : 0;
-
-	return lru_tier_from_refs(refs);
-}
-
 static bool get_cap(int cap)
 {
 #ifdef CONFIG_LRU_GEN_ENABLED
@@ -4130,7 +4112,8 @@ static bool sort_page(struct lruvec *lruvec, struct page *page, struct scan_cont
 	int gen = page_lru_gen(page);
 	int type = page_is_file_cache(page);
 	int zone = page_zonenum(page);
-	int tier = page_lru_tier(page);
+	int refs = page_lru_refs(page);
+	int tier = lru_tier_from_refs(refs);
 	int delta = hpage_nr_pages(page);
 	struct lru_gen_struct *lrugen = &lruvec->lrugen;
 
@@ -4158,7 +4141,8 @@ static bool sort_page(struct lruvec *lruvec, struct page *page, struct scan_cont
 		return true;
 	}
 
-	if (tier > tier_idx) {
+	/* protected */
+	if (tier > tier_idx || refs == BIT(LRU_REFS_WIDTH)) {
 		int hist = lru_hist_from_seq(lrugen->min_seq[type]);
 
 		gen = page_inc_gen(lruvec, page, false);
