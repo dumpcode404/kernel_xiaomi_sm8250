@@ -2915,10 +2915,9 @@ static bool should_skip_mm(struct mm_struct *mm, struct lru_gen_mm_walk *walk)
 	if (size < MIN_LRU_BATCH)
 		return true;
 
-	if (mm_is_oom_victim(mm))
-		return true;
+	mmgrab(mm);
 
-	return !mmget_not_zero(mm);
+	return false;
 }
 
 static bool iterate_mm_list(struct lruvec *lruvec, struct lru_gen_mm_walk *walk,
@@ -2982,6 +2981,12 @@ done:
 		reset_mm_stats(lruvec, walk, last);
 
 	spin_unlock(&mm_list->lock);
+
+	if (mm && first)
+		reset_bloom_filter(lruvec, walk->max_seq + 1);
+
+	if (*iter)
+		mmdrop(*iter);
 
 	*iter = mm;
 
