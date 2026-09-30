@@ -112,8 +112,17 @@ jobs:
             fi
           fi
 
-          make O=out ARCH=arm64 vendor/munch_defconfig PATH="${{ steps.workspace.outputs.tools_folder }}/clang/bin:$PATH"
-          make O=out CC=clang -j$(nproc --all) PATH="${{ steps.workspace.outputs.tools_folder }}/clang/bin:$PATH" CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1
+          make O=out ARCH=arm64 vendor/munch_defconfig \
+          PATH="${{ steps.workspace.outputs.tools_folder }}/clang/bin:$PATH"
+          
+          make O=out ARCH=arm64 \
+          CC=clang \
+          HOSTCC=gcc \
+          HOSTCXX=g++ \
+          -j$(nproc --all) \
+          PATH="${{ steps.workspace.outputs.tools_folder }}/clang/bin:$PATH" \
+          CROSS_COMPILE=aarch64-linux-gnu- \
+          LLVM=1 LLVM_IAS=1
         working-directory: ${{ steps.workspace.outputs.kernel_folder }}
 
       - name: Debug boot files
