@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2021 XiaoMi, Inc.
  */
 
 #ifndef _USBPD_H
@@ -10,7 +11,7 @@
 
 struct usbpd;
 
-#if IS_ENABLED(CONFIG_USB_PD_POLICY)
+#if IS_ENABLED(CONFIG_USB_PD_POLICY) || IS_ENABLED(CONFIG_USB_PD_POLICY_MUNCH)
 struct usbpd *usbpd_create(struct device *parent);
 void usbpd_destroy(struct usbpd *pd);
 #else
