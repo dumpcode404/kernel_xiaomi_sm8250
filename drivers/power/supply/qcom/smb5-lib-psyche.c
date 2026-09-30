@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2018-2020 The Linux Foundation. All rights reserved.
- * Copyright (C) 2021 XiaoMi, Inc.
  */
 
 #include <linux/device.h>
@@ -46,7 +45,6 @@
 
 bool off_charge_flag;
 static bool first_boot_flag;
-static int bypass_charging = 0;
 
 static void update_sw_icl_max(struct smb_charger *chg, int pst);
 static int smblib_get_prop_typec_mode(struct smb_charger *chg);
@@ -518,7 +516,11 @@ static const struct apsd_result smblib_apsd_results[] = {
 	[CDP] = {
 		.name	= "CDP",
 		.bit	= CDP_CHARGER_BIT,
+#ifdef CONFIG_FACTORY_BUILD
+		.pst	= POWER_SUPPLY_TYPE_USB
+#else
 		.pst	= POWER_SUPPLY_TYPE_USB_CDP
+#endif
 	},
 	[DCP] = {
 		.name	= "DCP",
@@ -1871,7 +1873,7 @@ static int set_sdp_current(struct smb_charger *chg, int icl_ua)
 	return rc;
 }
 
-#define CLEAN_CP_TO_SW_DELAY_MS 500
+#define CLEAN_CP_TO_SW_DELAY_MS 1000
 int smblib_set_icl_current(struct smb_charger *chg, int icl_ua)
 {
 	int rc = 0;
@@ -1892,7 +1894,7 @@ int smblib_set_icl_current(struct smb_charger *chg, int icl_ua)
 			    POWER_SUPPLY_TYPEC_SINK_DEBUG_ACCESSORY)
 		return 0;
 
-	if (pre_icl == 0 && icl_ua >= 1500000) {
+	if (pre_icl == 0 && icl_ua >= 900000) {
 		chg->cp_to_sw_status = true;
 		queue_delayed_work(system_power_efficient_wq, &chg->clean_cp_to_sw_work,
 				msecs_to_jiffies(CLEAN_CP_TO_SW_DELAY_MS));
@@ -2407,14 +2409,9 @@ int smblib_vbus_regulator_is_enabled(struct regulator_dev *rdev)
 int smblib_get_prop_input_suspend(struct smb_charger *chg,
 				  union power_supply_propval *val)
 {
-	if ((get_client_vote(chg->chg_disable_votable, BYPASS_VOTER) == 1)) {
-		val->intval = 1;
-	} else if (bypass_charging) {
-		val->intval = 2;
-	} else {
-		val->intval = 0;
-	}
-
+	val->intval
+		= (get_client_vote(chg->usb_icl_votable, USER_VOTER) == 0)
+		 || get_client_vote(chg->dc_suspend_votable, USER_VOTER);
 	return 0;
 }
 
@@ -2501,7 +2498,7 @@ static void smblib_check_input_status(struct smb_charger *chg)
 	if ((input_present & INPUT_PRESENT_DC
 			|| input_present & INPUT_PRESENT_USB)
 				&& !off_charge_flag
-				&& (vbat_uv <= CUTOFF_VOL_THR)) {
+				&& (vbat_uv <= (CUTOFF_VOL_THR - 200))) {
 		chg->report_input_absent = true;
 		power_supply_changed(chg->batt_psy);
 	}
@@ -3122,7 +3119,7 @@ int smblib_get_prop_batt_charge_done(struct smb_charger *chg,
 			if ((smblib_get_fastcharge_mode(chg) == true)
 				&& (pval.intval >= 98))
 				smblib_set_fastcharge_mode(chg, false);
-				return 0;
+			return 0;
 		}
 
 		if (smblib_get_fastcharge_mode(chg) == true)
@@ -3179,36 +3176,19 @@ int smblib_set_prop_input_suspend(struct smb_charger *chg,
 	int rc;
 
 	/* vote 0mA when suspended */
-	rc = vote(chg->usb_icl_votable, USER_VOTER, false, 0);
+	rc = vote(chg->usb_icl_votable, USER_VOTER, (bool)val->intval, 0);
 	if (rc < 0) {
 		smblib_err(chg, "Couldn't vote to %s USB rc=%d\n",
 			(bool)val->intval ? "suspend" : "resume", rc);
 		return rc;
 	}
 
-	rc = vote(chg->dc_suspend_votable, USER_VOTER, false, 0);
+	rc = vote(chg->dc_suspend_votable, USER_VOTER, (bool)val->intval, 0);
 	if (rc < 0) {
 		smblib_err(chg, "Couldn't vote to %s DC rc=%d\n",
 			(bool)val->intval ? "suspend" : "resume", rc);
 		return rc;
 	}
-
-	if (val->intval == 1) {
-          	rc = vote(chg->chg_disable_votable, BYPASS_VOTER, 1, 0);
-          	bypass_charging = 0;
-      	} else if (val->intval == 2) {
-          	rc = vote(chg->chg_disable_votable, BYPASS_VOTER, 0, 0);
-          	bypass_charging = 1;
-      	} else {
-          	rc = vote(chg->chg_disable_votable, BYPASS_VOTER, 0, 0);
-          	bypass_charging = 0;
-      	}
-
- 	if (rc < 0) {
-  		smblib_err(chg, "Couldn't vote to %d input_suspend rc=%d\n",
-  			val->intval, rc);
-  		return rc;
-  	}
 
 	power_supply_changed(chg->batt_psy);
 	return rc;
@@ -3517,11 +3497,6 @@ static int smblib_therm_charging(struct smb_charger *chg)
 	int thermal_fcc_ua = 0;
 	int rc;
 
-#ifdef CONFIG_D8G_SERVICE
-	if (skip_thermal || bypass_charging)
-		chg->system_temp_level = 0;
-#endif
-
 	if (chg->system_temp_level >= MAX_TEMP_LEVEL)
 		return 0;
 
@@ -3611,9 +3586,6 @@ static void smblib_thermal_setting_work(struct work_struct *work)
 	struct smb_charger *chg = container_of(work, struct smb_charger,
 			thermal_setting_work.work);
 
-	if (bypass_charging)
-		chg->pps_thermal_level = 0;
-
 	if (chg->pps_thermal_level > chg->system_temp_level) {
 		if (chg->pps_thermal_level - chg->system_temp_level >= 2)
 			chg->pps_thermal_level -= 2;
@@ -3671,10 +3643,6 @@ int smblib_set_prop_system_temp_level(struct smb_charger *chg,
 
 	vote(chg->chg_disable_votable, THERMAL_DAEMON_VOTER, false, 0);
 */
-
-	if (bypass_charging)
-		chg->system_temp_level = 0;
-
 	if (chg->pd_active == POWER_SUPPLY_PD_PPS_ACTIVE)
 		queue_delayed_work(system_power_efficient_wq, &chg->thermal_setting_work, 3 * HZ);
 	else
@@ -10328,9 +10296,8 @@ static void smblib_charger_type_recheck(struct work_struct *work)
 	if (smblib_get_prop_dfp_mode(chg) != POWER_SUPPLY_TYPEC_NONE)
 		goto check_next;
 
-		if (chg->typec_port && !chg->pr_swap_in_progress) {
+	if (chg->typec_port && !chg->pr_swap_in_progress) {
 
-<<<<<<< HEAD
 		/*
 		 * Schedule the work to differentiate actual removal
 		 * of cable and detach interrupt during role swap,
@@ -10348,25 +10315,6 @@ static void smblib_charger_type_recheck(struct work_struct *work)
 		 */
 		chg->typec_role_swap_failed = false;
 	}
-=======
-			/*
-			 * Schedule the work to differentiate actual removal
-			 * of cable and detach interrupt during role swap,
-			 * unregister the partner only during actual cable
-			 * removal.
-			 */
-			cancel_delayed_work(&chg->pr_swap_detach_work);
-			vote(chg->awake_votable, DETACH_DETECT_VOTER, true, 0);
-			schedule_delayed_work(&chg->pr_swap_detach_work,
-				msecs_to_jiffies(TYPEC_DETACH_DETECT_DELAY_MS));
-			smblib_force_dr_mode(chg, TYPEC_PORT_DRP);
-			/*
-			 * To handle cable removal during role
-			 * swap failure.
-			 */
-			chg->typec_role_swap_failed = false;
-		}
->>>>>>> parent of 21972fcb795e (drivers/power/supply: Checkout to LineageOS kernel)
 
 	if (!chg->recheck_charger)
 		chg->precheck_charger_type = chg->real_charger_type;
@@ -11388,13 +11336,15 @@ static int smblib_dynamic_recharge_vbat(struct smb_charger *chg)
 	} else
 		return 0;
 
-	rc = power_supply_set_property(chg->batt_psy,
-			POWER_SUPPLY_PROP_RECHARGE_VBAT,
-			&val);
-	if (rc < 0) {
-		dev_err(chg->dev, "Couldn't set POWER_SUPPLY_PROP_CHARGER_TEMP_MAX rc=%d\n",
-				rc);
-		return -EINVAL;
+	if (chg->batt_psy) {
+		rc = power_supply_set_property(chg->batt_psy,
+				POWER_SUPPLY_PROP_RECHARGE_VBAT,
+				&val);
+		if (rc < 0) {
+			dev_err(chg->dev, "Couldn't set POWER_SUPPLY_PROP_CHARGER_TEMP_MAX rc=%d\n",
+					rc);
+			return -EINVAL;
+		}
 	}
 
 	return 0;
