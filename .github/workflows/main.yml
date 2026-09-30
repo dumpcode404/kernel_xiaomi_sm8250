@@ -64,7 +64,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: clang
-          key: clang-ci
+          key: clang-ci-v2
           restore-keys: |
             clang-
 
@@ -91,6 +91,39 @@ jobs:
           echo "kernel_folder=$(pwd)/kernel_tree" >> $GITHUB_OUTPUT
         id: workspace
 
+      - name: Install Dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            bc \
+            bison \
+            build-essential \
+            ccache \
+            curl \
+            flex \
+            git \
+            libssl-dev \
+            lld \
+            python3 \
+            zstd \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabi \
+            binutils-arm-linux-gnueabi
+
+      - name: Setup Toolchain
+        run: |
+          CLANG_DIR=$(find $GITHUB_WORKSPACE/clang -type d -name bin | head -1)
+
+          echo "CLANG_DIR=$CLANG_DIR"
+
+          export PATH=$CLANG_DIR:$PATH
+
+          which clang
+          clang --version
+
+          echo "PATH=$PATH" >> $GITHUB_ENV
+          
       - name: Building kernel
         run: |
           export ARCH=arm64
@@ -112,17 +145,16 @@ jobs:
             fi
           fi
 
-          export PATH="${{ steps.workspace.outputs.tools_folder }}/clang/bin:$PATH"
+          make O=out vendor/munch_defconfig
 
-          make O=out ARCH=arm64 vendor/munch_defconfig
-          make O=out ARCH=arm64 \
+          make -j$(nproc) \
+            O=out \
             CC=clang \
-            HOSTCC=/usr/bin/gcc \
-            HOSTCXX=/usr/bin/g++ \
             LLVM=1 \
             LLVM_IAS=1 \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
-            -j$(nproc --all)
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
         working-directory: ${{ steps.workspace.outputs.kernel_folder }}
 
       - name: Debug boot files
