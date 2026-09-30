@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
+ * Copyright (C) 2021 XiaoMi, Inc.
  */
 
 #define pr_fmt(fmt) "QCOM-BATT: %s: " fmt, __func__
@@ -1186,7 +1187,7 @@ stepper_exit:
 	cp_configure_ilim(chip, FCC_VOTER, chip->slave_fcc_ua / 2);
 
 	if (reschedule_ms) {
-		queue_delayed_work(system_power_efficient_wq, &chip->fcc_stepper_work,
+		schedule_delayed_work(&chip->fcc_stepper_work,
 				msecs_to_jiffies(reschedule_ms));
 		pr_debug("Rescheduling FCC_STEPPER work\n");
 		return;
@@ -1275,6 +1276,7 @@ static int pl_fv_vote_callback(struct votable *votable, void *data,
 				POWER_SUPPLY_PROP_WIRELESS_POWER_GOOD_EN,
 				&pval);
 				if (pval.intval) {
+					pr_err("wireless re-triggering charging\n");
 					rc = power_supply_set_property(chip->batt_psy,
 						POWER_SUPPLY_PROP_FORCE_RECHARGE,
 						&pval);
@@ -1326,7 +1328,7 @@ static int usb_icl_vote_callback(struct votable *votable, void *data,
 	if (icl_ua <= 1400000)
 		vote(chip->pl_enable_votable_indirect, USBIN_I_VOTER, false, 0);
 	else
-		queue_delayed_work(system_power_efficient_wq, &chip->status_change_work,
+		schedule_delayed_work(&chip->status_change_work,
 						msecs_to_jiffies(PL_DELAY_MS));
 
 	/* rerun AICL */
@@ -1476,7 +1478,7 @@ static int pl_disable_vote_callback(struct votable *votable,
 			if (chip->step_fcc) {
 				vote(chip->pl_awake_votable, FCC_STEPPER_VOTER,
 					true, 0);
-				queue_delayed_work(system_power_efficient_wq, &chip->fcc_stepper_work,
+				schedule_delayed_work(&chip->fcc_stepper_work,
 					0);
 			}
 		} else {
@@ -1593,7 +1595,7 @@ static int pl_disable_vote_callback(struct votable *votable,
 			if (chip->step_fcc) {
 				vote(chip->pl_awake_votable, FCC_STEPPER_VOTER,
 					true, 0);
-				queue_delayed_work(system_power_efficient_wq, &chip->fcc_stepper_work,
+				schedule_delayed_work(&chip->fcc_stepper_work,
 					0);
 			}
 		}
@@ -1940,7 +1942,7 @@ static int pl_notifier_call(struct notifier_block *nb,
 	if ((strcmp(psy->desc->name, "parallel") == 0)
 	    || (strcmp(psy->desc->name, "battery") == 0)
 	    || (strcmp(psy->desc->name, "main") == 0))
-		queue_delayed_work(system_power_efficient_wq, &chip->status_change_work, 0);
+		schedule_delayed_work(&chip->status_change_work, 0);
 
 	return NOTIFY_OK;
 }
@@ -1983,8 +1985,10 @@ static void qcom_batt_create_debugfs(struct pl_data *chip)
 
 	chip->dfs_root = debugfs_create_dir("battery", NULL);
 	if (IS_ERR_OR_NULL(chip->dfs_root)) {
+#ifdef CONFIG_DEBUG_FS
 		pr_err("Couldn't create battery debugfs rc=%ld\n",
 			(long)chip->dfs_root);
+#endif
 		return;
 	}
 
