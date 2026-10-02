@@ -27,7 +27,7 @@ on:
 
       ANYKERNEL_URL:
         description: "AnyKernel URL (empty it to disable)"
-        default: "https://github.com/Impqxr/AKmunch"
+        default: "https://github.com/dumpcode404/AKmunch"
         required: false
       ANYKERNEL_BRANCH:
         description: "AnyKernel Branch"
